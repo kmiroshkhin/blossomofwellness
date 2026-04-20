@@ -1,9 +1,8 @@
 import os
 from contextlib import contextmanager
 from datetime import date
-from typing import Optional
 
-from nicegui import app, ui
+from nicegui import ui
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -19,10 +18,6 @@ ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
 if not ADMIN_EMAIL or not ADMIN_PASSWORD:
     raise RuntimeError('ADMIN_EMAIL and ADMIN_PASSWORD must be set.')
 
-STORAGE_SECRET = os.getenv('STORAGE_SECRET')
-if not STORAGE_SECRET:
-    raise RuntimeError('STORAGE_SECRET must be set.')
-
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
@@ -33,26 +28,6 @@ def get_conn():
         yield conn
     finally:
         conn.close()
-
-
-def get_client_session() -> Optional[dict]:
-    return app.storage.user.get('client')
-
-
-def set_client_session(client: dict) -> None:
-    app.storage.user['client'] = client
-
-
-def clear_client_session() -> None:
-    app.storage.user.pop('client', None)
-
-
-def is_admin_logged_in() -> bool:
-    return bool(app.storage.user.get('is_admin', False))
-
-
-def set_admin_logged_in(value: bool) -> None:
-    app.storage.user['is_admin'] = value
 
 
 def create_client_record(name: str, email: str) -> dict:
@@ -69,7 +44,7 @@ def create_client_record(name: str, email: str) -> dict:
         return dict(row)
 
 
-def get_client_by_email(email: str) -> Optional[dict]:
+def get_client_by_email(email: str):
     sql = text("""
         select id, name, email
         from public.clients
@@ -78,6 +53,18 @@ def get_client_by_email(email: str) -> Optional[dict]:
     """)
     with get_conn() as conn:
         row = conn.execute(sql, {'email': email}).mappings().first()
+        return dict(row) if row else None
+
+
+def get_client_by_id(client_id: int):
+    sql = text("""
+        select id, name, email
+        from public.clients
+        where id = :client_id
+        limit 1
+    """)
+    with get_conn() as conn:
+        row = conn.execute(sql, {'client_id': client_id}).mappings().first()
         return dict(row) if row else None
 
 
@@ -265,19 +252,23 @@ def client_login_page():
             if not client:
                 ui.notify('Client not found', type='negative')
                 return
-            set_client_session(client)
-            ui.navigate.to('/client-checkin')
+            ui.navigate.to(f"/client-checkin/{client['id']}")
         except Exception as exc:
             ui.notify(f'Login failed: {exc}', type='negative')
 
     ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
 
-@ui.page('/client-checkin')
-def client_checkin_page():
-    client = get_client_session()
+@ui.page('/client-checkin/{client_id}')
+def client_checkin_page(client_id: str):
+    try:
+        client = get_client_by_id(int(client_id))
+    except ValueError:
+        client = None
+
     if not client:
-        ui.navigate.to('/client-login')
+        page_shell('Client Check-In', 'Client not found', '/')
+        ui.label('Invalid client. Please log in again.').classes('text-red-600')
         return
 
     page_shell('Client Check-In', f"Logged in as {client['name']}", '/')
@@ -288,6 +279,24 @@ def client_checkin_page():
         sleep = ui.input('Sleep Hours')
         workout = ui.input('Workout Completed?')
         note = ui.textarea('Note')
+
+        @ui.refreshable
+        def recent():
+            rows = get_recent_checkins_for_client(client['id'], limit=10)
+            ui.separator()
+            ui.label('Recent Check-Ins').classes('text-xl font-semibold')
+            if not rows:
+                ui.label('No check-ins yet.')
+                return
+
+            for row in rows:
+                with ui.card().classes('w-full max-w-xl p-4'):
+                    ui.label(f"Date: {row.get('check_in_date', '')}")
+                    ui.label(f"Weight: {row.get('weight', '—')}")
+                    ui.label(f"Energy: {row.get('energy_level', '—')}")
+                    ui.label(f"Sleep: {row.get('sleep_hours', '—')}")
+                    ui.label(f"Workout: {row.get('workout_completed', '—')}")
+                    ui.label(f"Note: {row.get('quick_note', '—')}")
 
         def submit():
             try:
@@ -304,89 +313,39 @@ def client_checkin_page():
                     note.value,
                 )
                 ui.notify('Check-in saved')
+                weight.set_value('')
+                energy.set_value('')
+                sleep.set_value('')
+                workout.set_value('')
+                note.set_value('')
                 recent.refresh()
             except Exception as exc:
                 ui.notify(f'Check-in failed: {exc}', type='negative')
 
         ui.button('Submit Check-In', on_click=submit).classes('w-full')
-        ui.button('Log Out', on_click=lambda: (clear_client_session(), ui.navigate.to('/'))).props('outline')
-
-    ui.separator()
-    ui.label('Recent Check-Ins').classes('text-xl font-semibold')
-
-    @ui.refreshable
-    def recent():
-        rows = get_recent_checkins_for_client(client['id'], limit=10)
-        if not rows:
-            ui.label('No check-ins yet.')
-            return
-
-        for row in rows:
-            with ui.card().classes('w-full max-w-xl p-4'):
-                ui.label(f"Date: {row.get('check_in_date', '')}")
-                ui.label(f"Weight: {row.get('weight', '—')}")
-                ui.label(f"Energy: {row.get('energy_level', '—')}")
-                ui.label(f"Sleep: {row.get('sleep_hours', '—')}")
-                ui.label(f"Workout: {row.get('workout_completed', '—')}")
-                ui.label(f"Note: {row.get('quick_note', '—')}")
-
-    recent()
+        recent()
 
 
 @ui.page('/admin-login')
 def admin_login_page():
-    if is_admin_logged_in():
-        ui.navigate.to('/admin-dashboard')
-        return
-
     page_shell('Admin Login', 'Enter admin credentials', '/')
 
     email = ui.input('Admin Email').classes('w-full max-w-lg')
     password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full max-w-lg')
-
-    def login():
-        if email.value == ADMIN_EMAIL and password.value == ADMIN_PASSWORD:
-            set_admin_logged_in(True)
-            ui.navigate.to('/admin-dashboard')
-        else:
-            ui.notify('Invalid admin credentials', type='negative')
-
-    ui.button('Login', on_click=login).classes('w-full max-w-lg')
-
-
-@ui.page('/admin-dashboard')
-def admin_dashboard_page():
-    if not is_admin_logged_in():
-        ui.navigate.to('/admin-login')
-        return
-
-    page_shell('Admin Dashboard', 'Existing clients and latest records', '/')
-
-    with ui.row().classes('w-full items-center gap-4'):
-        search = ui.input('Search clients by name or email').classes('w-full max-w-lg')
-
-        def logout():
-            set_admin_logged_in(False)
-            ui.navigate.to('/')
-
-        ui.button('Log Out', on_click=logout).props('outline')
-
     results = ui.column().classes('w-full gap-3')
 
-    def render(query: str = ''):
+    def login():
         results.clear()
+        if email.value != ADMIN_EMAIL or password.value != ADMIN_PASSWORD:
+            ui.notify('Invalid admin credentials', type='negative')
+            return
+
         rows = get_admin_overview()
 
-        if query.strip():
-            q = query.strip().lower()
-            rows = [
-                row for row in rows
-                if q in (row.get('name') or '').lower() or q in (row.get('email') or '').lower()
-            ]
-
         with results:
+            ui.label('Admin Overview').classes('text-2xl font-semibold')
             if not rows:
-                ui.label('No matching clients found.')
+                ui.label('No clients found.')
                 return
 
             for row in rows:
@@ -400,8 +359,7 @@ def admin_dashboard_page():
                     ui.label(f"Latest workout: {row.get('workout_completed', '—')}")
                     ui.label(f"Latest note: {row.get('quick_note', '—')}")
 
-    search.on('update:model-value', lambda e: render(e.args))
-    render()
+    ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
 
 ui.run(
@@ -409,5 +367,4 @@ ui.run(
     port=int(os.environ.get('PORT', 8080)),
     title='Blossom of Wellness',
     reload=False,
-    storage_secret=STORAGE_SECRET,
 )
