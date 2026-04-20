@@ -3,9 +3,10 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Optional
 
-from nicegui import ui
+from nicegui import app, ui
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+
 
 PRIMARY = 'emerald'
 
@@ -13,10 +14,12 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError('DATABASE_URL is not set.')
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    raise RuntimeError('ADMIN_EMAIL and ADMIN_PASSWORD must be set.')
 
-current_client: Optional[dict] = None
-admin_session = False
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 @contextmanager
@@ -26,6 +29,26 @@ def get_conn():
         yield conn
     finally:
         conn.close()
+
+
+def get_client_session() -> Optional[dict]:
+    return app.storage.user.get('client')
+
+
+def set_client_session(client: dict) -> None:
+    app.storage.user['client'] = client
+
+
+def clear_client_session() -> None:
+    app.storage.user.pop('client', None)
+
+
+def is_admin_logged_in() -> bool:
+    return bool(app.storage.user.get('is_admin', False))
+
+
+def set_admin_logged_in(value: bool) -> None:
+    app.storage.user['is_admin'] = value
 
 
 def create_client_record(name: str, email: str) -> dict:
@@ -81,7 +104,7 @@ def submit_checkin_record(
             :workout_completed,
             :quick_note
         )
-        returning id, client_id, check_in_date, weight, energy_level
+        returning id, client_id, check_in_date, weight, energy_level, sleep_hours, workout_completed, quick_note
     """)
 
     payload = {
@@ -107,9 +130,9 @@ def search_clients(query: str = '') -> list[dict]:
         sql = text("""
             select id, name, email
             from public.clients
-            where name ilike :query
+            where name ilike :query or email ilike :query
             order by id desc
-            limit 25
+            limit 50
         """)
         params = {'query': f'%{query.strip()}%'}
     else:
@@ -117,7 +140,7 @@ def search_clients(query: str = '') -> list[dict]:
             select id, name, email
             from public.clients
             order by id desc
-            limit 25
+            limit 50
         """)
         params = {}
 
@@ -143,6 +166,40 @@ def get_recent_checkins_for_client(client_id: int, limit: int = 10) -> list[dict
     """)
     with get_conn() as conn:
         rows = conn.execute(sql, {'client_id': client_id, 'limit': limit}).mappings().all()
+        return [dict(row) for row in rows]
+
+
+def get_admin_overview(limit_clients: int = 50) -> list[dict]:
+    sql = text("""
+        select
+            c.id,
+            c.name,
+            c.email,
+            ci.check_in_date,
+            ci.weight,
+            ci.energy_level,
+            ci.sleep_hours,
+            ci.workout_completed,
+            ci.quick_note
+        from public.clients c
+        left join (
+            select distinct on (client_id)
+                client_id,
+                check_in_date,
+                weight,
+                energy_level,
+                sleep_hours,
+                workout_completed,
+                quick_note
+            from public.check_ins
+            order by client_id, check_in_date desc, id desc
+        ) ci
+            on c.id = ci.client_id
+        order by c.id desc
+        limit :limit_clients
+    """)
+    with get_conn() as conn:
+        rows = conn.execute(sql, {'limit_clients': limit_clients}).mappings().all()
         return [dict(row) for row in rows]
 
 
@@ -177,30 +234,24 @@ def landing_page():
     ok, message = test_db_connection()
     ui.label(message).classes(f"text-sm {'text-green-700' if ok else 'text-red-600'}")
 
-    with ui.row().classes('w-full gap-6'):    
-        for title, route in [
-            ('Client Login', '/client-login'),
-            ('Client Sign Up', '/client-signup'),
-            ('Admin Login', '/admin-dashboard'),
-]:
-            ui.button(title, on_click=lambda r=route: ui.navigate.to(r)).classes('w-full')
+    with ui.column().classes('w-full gap-4'):
+        ui.button('Client Login', on_click=lambda: ui.navigate.to('/client-login')).classes('w-full')
+        ui.button('Client Sign Up', on_click=lambda: ui.navigate.to('/client-signup')).classes('w-full')
+        ui.button('Admin Login', on_click=lambda: ui.navigate.to('/admin-login')).classes('w-full')
 
 
 @ui.page('/client-login')
 def client_login_page():
-    global current_client
-
     page_shell('Client Login', 'Enter your email', '/')
 
-    email = ui.input('Email').classes('w-full')
+    email = ui.input('Email').classes('w-full max-w-lg')
 
     def login():
-        global current_client
         client = get_client_by_email(email.value or '')
         if not client:
             ui.notify('Client not found', type='negative')
             return
-        current_client = client
+        set_client_session(client)
         ui.navigate.to('/client-checkin')
 
     ui.button('Login', on_click=login)
@@ -208,20 +259,25 @@ def client_login_page():
 
 @ui.page('/client-signup')
 def client_signup_page():
-    global current_client
+    page_shell('Client Sign Up', 'Create a client profile', '/')
 
-    page_shell('Sign Up', 'Create a client profile', '/')
-
-    name = ui.input('Name')
-    email = ui.input('Email')
+    name = ui.input('Name').classes('w-full max-w-lg')
+    email = ui.input('Email').classes('w-full max-w-lg')
 
     def signup():
-        global current_client
         if not name.value or not email.value:
             ui.notify('Name and email required', type='warning')
             return
+
+        existing = get_client_by_email(email.value)
+        if existing:
+            set_client_session(existing)
+            ui.notify('Client already exists. Loading profile.', type='warning')
+            ui.navigate.to('/client-checkin')
+            return
+
         client = create_client_record(name.value, email.value)
-        current_client = client
+        set_client_session(client)
         ui.navigate.to('/client-checkin')
 
     ui.button('Create', on_click=signup)
@@ -229,37 +285,131 @@ def client_signup_page():
 
 @ui.page('/client-checkin')
 def client_checkin_page():
-    page_shell('Check-in', 'Submit today’s data', '/')
+    client = get_client_session()
+    if not client:
+        ui.navigate.to('/client-login')
+        return
 
-    weight = ui.input('Weight')
-    energy = ui.input('Energy (1–10)')
-    sleep = ui.input('Sleep')
-    workout = ui.input('Workout')
-    note = ui.textarea('Note')
+    page_shell('Check-in', f"Logged in as {client['name']}", '/')
 
-    def submit():
-        if not current_client:
-            ui.notify('Login required', type='negative')
+    with ui.column().classes('w-full max-w-xl gap-3'):
+        weight = ui.input('Weight')
+        energy = ui.input('Energy (1–10)')
+        sleep = ui.input('Sleep hours')
+        workout = ui.input('Workout completed?')
+        note = ui.textarea('Note')
+
+        def submit():
+            if not energy.value:
+                ui.notify('Energy is required', type='warning')
+                return
+
+            submit_checkin_record(
+                client['id'],
+                weight.value,
+                energy.value,
+                sleep.value,
+                workout.value,
+                note.value,
+            )
+            ui.notify('Saved')
+            recent.refresh()
+
+        ui.button('Submit', on_click=submit)
+        ui.button('Log out', on_click=lambda: (clear_client_session(), ui.navigate.to('/'))).props('outline')
+
+    ui.separator()
+
+    ui.label('Recent Check-ins').classes('text-xl font-semibold')
+
+    @ui.refreshable
+    def recent():
+        rows = get_recent_checkins_for_client(client['id'], limit=10)
+        if not rows:
+            ui.label('No check-ins yet.')
             return
-        submit_checkin_record(
-            current_client['id'],
-            weight.value,
-            energy.value,
-            sleep.value,
-            workout.value,
-            note.value,
-        )
-        ui.notify('Saved')
 
-    ui.button('Submit', on_click=submit)
+        for row in rows:
+            with ui.card().classes('w-full max-w-xl p-4'):
+                ui.label(f"Date: {row.get('check_in_date', '')}")
+                ui.label(f"Weight: {row.get('weight', '—')}")
+                ui.label(f"Energy: {row.get('energy_level', '—')}")
+                ui.label(f"Sleep: {row.get('sleep_hours', '—')}")
+                ui.label(f"Workout: {row.get('workout_completed', '—')}")
+                ui.label(f"Note: {row.get('quick_note', '—')}")
+
+    recent()
+
+
+@ui.page('/admin-login')
+def admin_login_page():
+    if is_admin_logged_in():
+        ui.navigate.to('/admin-dashboard')
+        return
+
+    page_shell('Admin Login', 'Enter admin credentials', '/')
+
+    email = ui.input('Admin Email').classes('w-full max-w-lg')
+    password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full max-w-lg')
+
+    def login():
+        if email.value == ADMIN_EMAIL and password.value == ADMIN_PASSWORD:
+            set_admin_logged_in(True)
+            ui.navigate.to('/admin-dashboard')
+        else:
+            ui.notify('Invalid admin credentials', type='negative')
+
+    ui.button('Login', on_click=login)
 
 
 @ui.page('/admin-dashboard')
 def admin_dashboard_page():
-    page_shell('Admin Dashboard', 'Client overview', '/')
+    if not is_admin_logged_in():
+        ui.navigate.to('/admin-login')
+        return
 
-    for client in search_clients():
-        ui.label(client['name'])
+    page_shell('Admin Dashboard', 'Overview of clients and latest check-ins', '/')
+
+    with ui.row().classes('w-full items-center gap-4'):
+        search = ui.input('Search clients by name or email').classes('w-full max-w-lg')
+
+        def logout():
+            set_admin_logged_in(False)
+            ui.navigate.to('/')
+
+        ui.button('Log out', on_click=logout).props('outline')
+
+    results = ui.column().classes('w-full gap-3')
+
+    def render(query: str = ''):
+        results.clear()
+        rows = get_admin_overview()
+
+        if query.strip():
+            q = query.strip().lower()
+            rows = [
+                row for row in rows
+                if q in (row.get('name') or '').lower() or q in (row.get('email') or '').lower()
+            ]
+
+        with results:
+            if not rows:
+                ui.label('No matching clients found.')
+                return
+
+            for row in rows:
+                with ui.card().classes('w-full p-4'):
+                    ui.label(f"{row.get('name', 'Unknown')}").classes('text-lg font-semibold')
+                    ui.label(f"Email: {row.get('email', '—')}")
+                    ui.label(f"Last check-in: {row.get('check_in_date', 'No check-ins yet')}")
+                    ui.label(f"Latest weight: {row.get('weight', '—')}")
+                    ui.label(f"Latest energy: {row.get('energy_level', '—')}")
+                    ui.label(f"Latest sleep: {row.get('sleep_hours', '—')}")
+                    ui.label(f"Latest workout: {row.get('workout_completed', '—')}")
+                    ui.label(f"Latest note: {row.get('quick_note', '—')}")
+
+    search.on('update:model-value', lambda e: render(e.args))
+    render()
 
 
 ui.run(
