@@ -177,12 +177,12 @@ def landing_page():
     ok, message = test_db_connection()
     ui.label(message).classes(f"text-sm {'text-green-700' if ok else 'text-red-600'}")
 
-    with ui.row().classes('w-full gap-6'):
+    with ui.row().classes('w-full gap-6'):    
         for title, route in [
             ('Client Login', '/client-login'),
             ('Client Sign Up', '/client-signup'),
-            ('Admin Login', '/admin-login'),
-        ]:
+            ('Admin Login', '/admin-dashboard'),
+]:
             ui.button(title, on_click=lambda r=route: ui.navigate.to(r)).classes('w-full')
 
 
@@ -266,4 +266,5 @@ ui.run(
     host='0.0.0.0',
     port=int(os.environ.get('PORT', 8080)),
     title='Blossom of Wellness',
+    reload=False,
 )
