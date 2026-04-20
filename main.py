@@ -125,30 +125,6 @@ def submit_checkin_record(
         return dict(row)
 
 
-def search_clients(query: str = '') -> list[dict]:
-    if query.strip():
-        sql = text("""
-            select id, name, email
-            from public.clients
-            where name ilike :query or email ilike :query
-            order by id desc
-            limit 50
-        """)
-        params = {'query': f'%{query.strip()}%'}
-    else:
-        sql = text("""
-            select id, name, email
-            from public.clients
-            order by id desc
-            limit 50
-        """)
-        params = {}
-
-    with get_conn() as conn:
-        rows = conn.execute(sql, params).mappings().all()
-        return [dict(row) for row in rows]
-
-
 def get_recent_checkins_for_client(client_id: int, limit: int = 10) -> list[dict]:
     sql = text("""
         select
@@ -319,7 +295,6 @@ def client_checkin_page():
         ui.button('Log out', on_click=lambda: (clear_client_session(), ui.navigate.to('/'))).props('outline')
 
     ui.separator()
-
     ui.label('Recent Check-ins').classes('text-xl font-semibold')
 
     @ui.refreshable
@@ -399,7 +374,7 @@ def admin_dashboard_page():
 
             for row in rows:
                 with ui.card().classes('w-full p-4'):
-                    ui.label(f"{row.get('name', 'Unknown')}").classes('text-lg font-semibold')
+                    ui.label(row.get('name', 'Unknown')).classes('text-lg font-semibold')
                     ui.label(f"Email: {row.get('email', '—')}")
                     ui.label(f"Last check-in: {row.get('check_in_date', 'No check-ins yet')}")
                     ui.label(f"Latest weight: {row.get('weight', '—')}")
