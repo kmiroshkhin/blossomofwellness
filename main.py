@@ -19,6 +19,10 @@ ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
 if not ADMIN_EMAIL or not ADMIN_PASSWORD:
     raise RuntimeError('ADMIN_EMAIL and ADMIN_PASSWORD must be set.')
 
+STORAGE_SECRET = os.getenv('STORAGE_SECRET')
+if not STORAGE_SECRET:
+    raise RuntimeError('STORAGE_SECRET must be set.')
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
@@ -145,7 +149,7 @@ def get_recent_checkins_for_client(client_id: int, limit: int = 10) -> list[dict
         return [dict(row) for row in rows]
 
 
-def get_admin_overview(limit_clients: int = 50) -> list[dict]:
+def get_admin_overview(limit_clients: int = 100) -> list[dict]:
     sql = text("""
         select
             c.id,
@@ -216,47 +220,57 @@ def landing_page():
         ui.button('Admin Login', on_click=lambda: ui.navigate.to('/admin-login')).classes('w-full')
 
 
-@ui.page('/client-login')
-def client_login_page():
-    page_shell('Client Login', 'Enter your email', '/')
-
-    email = ui.input('Email').classes('w-full max-w-lg')
-
-    def login():
-        client = get_client_by_email(email.value or '')
-        if not client:
-            ui.notify('Client not found', type='negative')
-            return
-        set_client_session(client)
-        ui.navigate.to('/client-checkin')
-
-    ui.button('Login', on_click=login)
-
-
 @ui.page('/client-signup')
 def client_signup_page():
-    page_shell('Client Sign Up', 'Create a client profile', '/')
+    page_shell('Client Sign Up', 'Enter name and email to create a client record', '/')
 
     name = ui.input('Name').classes('w-full max-w-lg')
     email = ui.input('Email').classes('w-full max-w-lg')
 
     def signup():
-        if not name.value or not email.value:
-            ui.notify('Name and email required', type='warning')
-            return
+        try:
+            if not name.value or not email.value:
+                ui.notify('Name and email required', type='warning')
+                return
 
-        existing = get_client_by_email(email.value)
-        if existing:
-            set_client_session(existing)
-            ui.notify('Client already exists. Loading profile.', type='warning')
+            existing = get_client_by_email(email.value)
+            if existing:
+                ui.notify('Client already exists. Please use Client Login.', type='warning')
+                return
+
+            create_client_record(name.value, email.value)
+            ui.navigate.to('/client-signup-success')
+        except Exception as exc:
+            ui.notify(f'Sign up failed: {exc}', type='negative')
+
+    ui.button('Create Client', on_click=signup).classes('w-full max-w-lg')
+
+
+@ui.page('/client-signup-success')
+def client_signup_success_page():
+    page_shell('Client Created', 'The client was successfully added to the system.', '/')
+    ui.label('Success — the client record has been saved.').classes('text-lg text-green-700')
+    ui.button('Back to Home', on_click=lambda: ui.navigate.to('/')).classes('mt-4')
+
+
+@ui.page('/client-login')
+def client_login_page():
+    page_shell('Client Login', 'Enter your email to continue to check-ins', '/')
+
+    email = ui.input('Email').classes('w-full max-w-lg')
+
+    def login():
+        try:
+            client = get_client_by_email(email.value or '')
+            if not client:
+                ui.notify('Client not found', type='negative')
+                return
+            set_client_session(client)
             ui.navigate.to('/client-checkin')
-            return
+        except Exception as exc:
+            ui.notify(f'Login failed: {exc}', type='negative')
 
-        client = create_client_record(name.value, email.value)
-        set_client_session(client)
-        ui.navigate.to('/client-checkin')
-
-    ui.button('Create', on_click=signup)
+    ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
 
 @ui.page('/client-checkin')
@@ -266,36 +280,39 @@ def client_checkin_page():
         ui.navigate.to('/client-login')
         return
 
-    page_shell('Check-in', f"Logged in as {client['name']}", '/')
+    page_shell('Client Check-In', f"Logged in as {client['name']}", '/')
 
     with ui.column().classes('w-full max-w-xl gap-3'):
         weight = ui.input('Weight')
         energy = ui.input('Energy (1–10)')
-        sleep = ui.input('Sleep hours')
-        workout = ui.input('Workout completed?')
+        sleep = ui.input('Sleep Hours')
+        workout = ui.input('Workout Completed?')
         note = ui.textarea('Note')
 
         def submit():
-            if not energy.value:
-                ui.notify('Energy is required', type='warning')
-                return
+            try:
+                if not energy.value:
+                    ui.notify('Energy is required', type='warning')
+                    return
 
-            submit_checkin_record(
-                client['id'],
-                weight.value,
-                energy.value,
-                sleep.value,
-                workout.value,
-                note.value,
-            )
-            ui.notify('Saved')
-            recent.refresh()
+                submit_checkin_record(
+                    client['id'],
+                    weight.value,
+                    energy.value,
+                    sleep.value,
+                    workout.value,
+                    note.value,
+                )
+                ui.notify('Check-in saved')
+                recent.refresh()
+            except Exception as exc:
+                ui.notify(f'Check-in failed: {exc}', type='negative')
 
-        ui.button('Submit', on_click=submit)
-        ui.button('Log out', on_click=lambda: (clear_client_session(), ui.navigate.to('/'))).props('outline')
+        ui.button('Submit Check-In', on_click=submit).classes('w-full')
+        ui.button('Log Out', on_click=lambda: (clear_client_session(), ui.navigate.to('/'))).props('outline')
 
     ui.separator()
-    ui.label('Recent Check-ins').classes('text-xl font-semibold')
+    ui.label('Recent Check-Ins').classes('text-xl font-semibold')
 
     @ui.refreshable
     def recent():
@@ -334,7 +351,7 @@ def admin_login_page():
         else:
             ui.notify('Invalid admin credentials', type='negative')
 
-    ui.button('Login', on_click=login)
+    ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
 
 @ui.page('/admin-dashboard')
@@ -343,7 +360,7 @@ def admin_dashboard_page():
         ui.navigate.to('/admin-login')
         return
 
-    page_shell('Admin Dashboard', 'Overview of clients and latest check-ins', '/')
+    page_shell('Admin Dashboard', 'Existing clients and latest records', '/')
 
     with ui.row().classes('w-full items-center gap-4'):
         search = ui.input('Search clients by name or email').classes('w-full max-w-lg')
@@ -352,7 +369,7 @@ def admin_dashboard_page():
             set_admin_logged_in(False)
             ui.navigate.to('/')
 
-        ui.button('Log out', on_click=logout).props('outline')
+        ui.button('Log Out', on_click=logout).props('outline')
 
     results = ui.column().classes('w-full gap-3')
 
@@ -392,4 +409,5 @@ ui.run(
     port=int(os.environ.get('PORT', 8080)),
     title='Blossom of Wellness',
     reload=False,
+    storage_secret=STORAGE_SECRET,
 )
