@@ -9,6 +9,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 PRIMARY = 'emerald'
 
+APP_VERSION = '2026-04-19-sessionless-v1'
+print(f'Starting Blossom of Wellness: {APP_VERSION}')
+
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError('DATABASE_URL is not set.')
@@ -229,6 +232,7 @@ def client_signup_page():
             ui.navigate.to('/client-signup-success')
         except Exception as exc:
             ui.notify(f'Sign up failed: {exc}', type='negative')
+        print('client signup clicked')
 
     ui.button('Create Client', on_click=signup).classes('w-full max-w-lg')
 
@@ -255,6 +259,7 @@ def client_login_page():
             ui.navigate.to(f"/client-checkin/{client['id']}")
         except Exception as exc:
             ui.notify(f'Login failed: {exc}', type='negative')
+        print('client login clicked')
 
     ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
@@ -358,6 +363,7 @@ def admin_login_page():
                     ui.label(f"Latest sleep: {row.get('sleep_hours', '—')}")
                     ui.label(f"Latest workout: {row.get('workout_completed', '—')}")
                     ui.label(f"Latest note: {row.get('quick_note', '—')}")
+        print('admin login clicked')
 
     ui.button('Login', on_click=login).classes('w-full max-w-lg')
 
@@ -368,3 +374,5 @@ ui.run(
     title='Blossom of Wellness',
     reload=False,
 )
+
+ui.label(APP_VERSION).classes('text-xs text-gray-500')
