@@ -110,7 +110,7 @@ body {
     }
 }
 </style>
-''')
+''', shared=True)
 
 print(f'Starting Blossom of Wellness: {APP_VERSION}')
 
