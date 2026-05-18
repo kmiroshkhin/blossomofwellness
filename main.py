@@ -8,7 +8,109 @@ from sqlalchemy.exc import SQLAlchemyError
 
 
 PRIMARY = 'emerald'
-APP_VERSION = '2026-05-17-fitness-competition-mvp-v1'
+APP_VERSION = '2026-05-17-fitness-competition-mvp-v2-ui-upgrade'
+
+ui.add_head_html('''
+<style>
+body {
+    background:
+        linear-gradient(rgba(250,250,250,0.90), rgba(248,248,248,0.95)),
+        url("https://images.unsplash.com/photo-1518611012118-696072aa579a?q=80&w=1800&auto=format&fit=crop")
+        center center / cover fixed;
+    font-family: "Inter", sans-serif;
+}
+
+.hero-card {
+    background: rgba(255,255,255,0.86);
+    backdrop-filter: blur(12px);
+    border-radius: 28px;
+    box-shadow: 0 12px 35px rgba(0,0,0,0.10);
+    border: 1px solid rgba(255,255,255,0.65);
+}
+
+.score-card {
+    background: linear-gradient(135deg, #ffffff, #f7faf7);
+    border-radius: 24px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.09);
+    border: 1px solid rgba(0,0,0,0.05);
+}
+
+.checkin-card {
+    background: rgba(255,255,255,0.88);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.09);
+}
+
+.hero-title {
+    font-size: 46px;
+    font-weight: 850;
+    line-height: 1.05;
+}
+
+.hero-subtitle {
+    font-size: 21px;
+    color: #4b5563;
+}
+
+.section-title {
+    font-size: 28px;
+    font-weight: 750;
+}
+
+.winner-text {
+    color: #d97706;
+    font-weight: 800;
+    font-size: 22px;
+}
+
+.kirill-button button {
+    background: linear-gradient(135deg, #047857, #10b981) !important;
+    color: white !important;
+    border-radius: 20px !important;
+    font-weight: 800;
+    height: 64px;
+    font-size: 17px;
+    box-shadow: 0 8px 22px rgba(16,185,129,0.35);
+}
+
+.flor-button button {
+    background: linear-gradient(135deg, #db2777, #f472b6) !important;
+    color: white !important;
+    border-radius: 20px !important;
+    font-weight: 800;
+    height: 64px;
+    font-size: 17px;
+    box-shadow: 0 8px 22px rgba(244,114,182,0.35);
+}
+
+.leaderboard-button button {
+    border-radius: 20px !important;
+    height: 58px;
+    font-weight: 800;
+    font-size: 16px;
+}
+
+.glow {
+    animation: glowPulse 2.4s infinite ease-in-out;
+}
+
+@keyframes glowPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.015); }
+    100% { transform: scale(1); }
+}
+
+@media (max-width: 640px) {
+    .hero-title {
+        font-size: 36px;
+    }
+    .hero-subtitle {
+        font-size: 18px;
+    }
+}
+</style>
+''')
 
 print(f'Starting Blossom of Wellness: {APP_VERSION}')
 
@@ -173,7 +275,7 @@ def get_weekly_scores() -> dict:
 
 
 def page_shell(title: str, subtitle: str, back_route: str | None = None):
-    with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
+    with ui.column().classes('w-full max-w-5xl mx-auto p-6 gap-6'):
         with ui.row().classes('w-full items-center justify-between'):
             with ui.row().classes('items-center gap-3'):
                 ui.icon('local_florist', color=PRIMARY).classes('text-4xl')
@@ -189,24 +291,61 @@ def page_shell(title: str, subtitle: str, back_route: str | None = None):
 
 @ui.page('/')
 def landing_page():
-    page_shell('Weekly Fitness Challenge', 'Daily check-ins. Weekly winner. Blossom energy.')
-
     ok, message = test_db_connection()
-    ui.label(message).classes(f"text-sm {'text-green-700' if ok else 'text-red-600'}")
-
     scores = get_weekly_scores()
 
-    with ui.card().classes('w-full p-5'):
-        ui.label('Current Weekly Score').classes('text-xl font-semibold')
-        ui.label(f"Kirill: {scores.get('Kirill', 0)} points")
-        ui.label(f"Flor: {scores.get('Flor', 0)} points")
+    kirill_score = scores.get('Kirill', 0)
+    flor_score = scores.get('Flor', 0)
 
-    with ui.column().classes('w-full gap-4'):
-        ui.button('Kirill Check-In', on_click=lambda: ui.navigate.to('/login/Kirill')).classes('w-full')
-        ui.button('Flor Check-In', on_click=lambda: ui.navigate.to('/login/Flor')).classes('w-full')
-        ui.button('View Leaderboard', on_click=lambda: ui.navigate.to('/leaderboard')).classes('w-full').props('outline')
+    if kirill_score > flor_score:
+        leader = 'Kirill 🌱'
+    elif flor_score > kirill_score:
+        leader = 'Flor 🌸'
+    else:
+        leader = 'Tie 🤝'
 
-    ui.label(f'Version: {APP_VERSION}').classes('text-xs text-gray-500')
+    with ui.column().classes('w-full max-w-5xl mx-auto p-6 gap-6'):
+
+        with ui.card().classes('hero-card w-full p-10 glow'):
+            ui.label('Blossom of Wellness').classes('hero-title')
+            ui.label('Discipline. Competition. Growth.').classes('hero-subtitle')
+
+            ui.separator()
+
+            ui.label('Kirill 🌱 vs Flor 🌸').classes('text-3xl font-bold')
+            ui.label('Weekly Fitness Challenge').classes('text-xl text-gray-600')
+            ui.label(f'Current Leader: {leader}').classes('winner-text mt-4')
+
+        with ui.card().classes('score-card w-full p-8'):
+            ui.label('Current Weekly Score').classes('section-title')
+            ui.separator()
+
+            ui.label(f'Kirill 🌱 — {kirill_score} points').classes('text-2xl font-semibold text-emerald-700')
+            ui.linear_progress(value=min(kirill_score / 28, 1.0)).props('color=positive').classes('w-full')
+
+            ui.space()
+
+            ui.label(f'Flor 🌸 — {flor_score} points').classes('text-2xl font-semibold text-pink-500')
+            ui.linear_progress(value=min(flor_score / 28, 1.0)).props('color=pink').classes('w-full')
+
+        with ui.column().classes('w-full gap-4'):
+            ui.button(
+                'KIRILL CHECK-IN 🌱',
+                on_click=lambda: ui.navigate.to('/login/Kirill')
+            ).classes('w-full kirill-button')
+
+            ui.button(
+                'FLOR CHECK-IN 🌸',
+                on_click=lambda: ui.navigate.to('/login/Flor')
+            ).classes('w-full flor-button')
+
+            ui.button(
+                'VIEW LEADERBOARD 🏆',
+                on_click=lambda: ui.navigate.to('/leaderboard')
+            ).props('outline').classes('w-full leaderboard-button')
+
+        ui.label(message).classes(f"text-sm {'text-green-700' if ok else 'text-red-600'}")
+        ui.label(f'Version: {APP_VERSION}').classes('text-xs text-gray-500')
 
 
 @ui.page('/login/{participant_name}')
@@ -217,18 +356,19 @@ def login_page(participant_name: str):
 
     page_shell(f'{participant_name} Login', 'Enter your password to continue.', '/')
 
-    password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full max-w-lg')
+    with ui.card().classes('checkin-card w-full max-w-xl mx-auto p-6'):
+        password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full')
 
-    def login():
-        expected = KIRILL_PASSWORD if participant_name == 'Kirill' else FLOR_PASSWORD
+        def login():
+            expected = KIRILL_PASSWORD if participant_name == 'Kirill' else FLOR_PASSWORD
 
-        if password.value != expected:
-            ui.notify('Invalid password', type='negative')
-            return
+            if password.value != expected:
+                ui.notify('Invalid password', type='negative')
+                return
 
-        ui.navigate.to(f'/checkin/{participant_name}')
+            ui.navigate.to(f'/checkin/{participant_name}')
 
-    ui.button('Continue', on_click=login).classes('w-full max-w-lg')
+        ui.button('Continue', on_click=login).classes('w-full')
 
 
 @ui.page('/checkin/{participant_name}')
@@ -247,43 +387,44 @@ def checkin_page(participant_name: str):
         '/',
     )
 
-    if is_friday:
-        ui.label('Friday cheat day: alcohol has no penalty today.').classes('text-amber-700 font-semibold')
+    with ui.card().classes('checkin-card w-full max-w-2xl mx-auto p-6 gap-5'):
+        if is_friday:
+            ui.label('Friday cheat day: alcohol has no penalty today.').classes('text-amber-700 font-semibold')
 
-    if is_saturday:
-        ui.label('Saturday recovery rule: sleep target is automatically credited today.').classes('text-emerald-700 font-semibold')
+        if is_saturday:
+            ui.label('Saturday recovery rule: sleep target is automatically credited today.').classes('text-emerald-700 font-semibold')
 
-    sleep = ui.checkbox('Sleep target above 75%? (+1)').classes('text-lg')
-    strain = ui.checkbox('Daily strain target met? (+1)').classes('text-lg')
-    protein = ui.checkbox('Daily protein intake met? (+1)').classes('text-lg')
-    calories = ui.checkbox('Daily calorie target met? (+1)').classes('text-lg')
-    alcohol = ui.checkbox('Alcohol consumed? (-3, except Friday)').classes('text-lg')
+        sleep = ui.checkbox('Sleep target above 75%? (+1)').classes('text-lg')
+        strain = ui.checkbox('Daily strain target met? (+1)').classes('text-lg')
+        protein = ui.checkbox('Daily protein intake met? (+1)').classes('text-lg')
+        calories = ui.checkbox('Daily calorie target met? (+1)').classes('text-lg')
+        alcohol = ui.checkbox('Alcohol consumed? (-3, except Friday)').classes('text-lg')
 
-    if is_saturday:
-        sleep.set_value(True)
-        sleep.disable()
+        if is_saturday:
+            sleep.set_value(True)
+            sleep.disable()
 
-    result = ui.column().classes('w-full gap-3')
+        result = ui.column().classes('w-full gap-3')
 
-    def submit():
-        result.clear()
+        def submit():
+            result.clear()
 
-        row = save_checkin(
-            participant_name,
-            bool(sleep.value),
-            bool(strain.value),
-            bool(protein.value),
-            bool(calories.value),
-            bool(alcohol.value),
-        )
+            row = save_checkin(
+                participant_name,
+                bool(sleep.value),
+                bool(strain.value),
+                bool(protein.value),
+                bool(calories.value),
+                bool(alcohol.value),
+            )
 
-        with result:
-            ui.notify('Check-in saved', type='positive')
-            ui.card().classes('w-full p-4').classes('bg-green-50')
-            ui.label(f"Saved for {participant_name}: {row['daily_score']} points today").classes('text-xl font-semibold')
-            ui.button('View Leaderboard', on_click=lambda: ui.navigate.to('/leaderboard')).classes('w-full')
+            with result:
+                ui.notify('Check-in saved', type='positive')
+                with ui.card().classes('w-full p-4 bg-green-50'):
+                    ui.label(f"Saved for {participant_name}: {row['daily_score']} points today").classes('text-xl font-semibold')
+                    ui.button('View Leaderboard', on_click=lambda: ui.navigate.to('/leaderboard')).classes('w-full')
 
-    ui.button('Submit Check-In', on_click=submit).classes('w-full max-w-lg')
+        ui.button('Submit Check-In', on_click=submit).classes('w-full')
 
 
 @ui.page('/leaderboard')
@@ -303,15 +444,15 @@ def leaderboard_page():
     kirill_score = scores.get('Kirill', 0)
     flor_score = scores.get('Flor', 0)
 
-    with ui.card().classes('w-full p-5'):
+    with ui.card().classes('score-card w-full p-8 glow'):
         ui.label('Current Score').classes('text-2xl font-bold')
-        ui.label(f'Kirill: {kirill_score} points').classes('text-lg')
-        ui.label(f'Flor: {flor_score} points').classes('text-lg')
+        ui.label(f'Kirill 🌱: {kirill_score} points').classes('text-lg text-emerald-700 font-semibold')
+        ui.label(f'Flor 🌸: {flor_score} points').classes('text-lg text-pink-500 font-semibold')
 
         if kirill_score > flor_score:
-            ui.label('Current leader: Kirill 🌱').classes('text-green-700 font-semibold')
+            ui.label('Current leader: Kirill 🌱').classes('winner-text')
         elif flor_score > kirill_score:
-            ui.label('Current leader: Flor 🌸').classes('text-green-700 font-semibold')
+            ui.label('Current leader: Flor 🌸').classes('winner-text')
         else:
             ui.label('Currently tied 🤝').classes('text-amber-700 font-semibold')
 
@@ -323,7 +464,7 @@ def leaderboard_page():
         return
 
     for row in rows:
-        with ui.card().classes('w-full p-4'):
+        with ui.card().classes('score-card w-full p-4'):
             ui.label(f"{row['check_in_date']} — {row['participant_name']}").classes('font-semibold')
             ui.label(f"Daily score: {row['daily_score']}")
             ui.label(f"Sleep: {'Yes' if row['sleep_target_met'] else 'No'}")
