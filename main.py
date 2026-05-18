@@ -1,6 +1,6 @@
 import os
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 
 from nicegui import ui
 from sqlalchemy import create_engine, text
@@ -8,18 +8,18 @@ from sqlalchemy.exc import SQLAlchemyError
 
 
 PRIMARY = 'emerald'
+APP_VERSION = '2026-05-17-fitness-competition-mvp-v1'
 
-APP_VERSION = '2026-04-19-sessionless-v1'
 print(f'Starting Blossom of Wellness: {APP_VERSION}')
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
     raise RuntimeError('DATABASE_URL is not set.')
 
-ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
-ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
-if not ADMIN_EMAIL or not ADMIN_PASSWORD:
-    raise RuntimeError('ADMIN_EMAIL and ADMIN_PASSWORD must be set.')
+KIRILL_PASSWORD = os.getenv('KIRILL_PASSWORD')
+FLOR_PASSWORD = os.getenv('FLOR_PASSWORD')
+if not KIRILL_PASSWORD or not FLOR_PASSWORD:
+    raise RuntimeError('KIRILL_PASSWORD and FLOR_PASSWORD must be set.')
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -33,144 +33,36 @@ def get_conn():
         conn.close()
 
 
-def create_client_record(name: str, email: str) -> dict:
-    sql = text("""
-        insert into public.clients (name, email)
-        values (:name, :email)
-        returning id, name, email
-    """)
-    with get_conn() as conn:
-        row = conn.execute(sql, {'name': name, 'email': email}).mappings().first()
-        conn.commit()
-        if not row:
-            raise RuntimeError('Client insert failed.')
-        return dict(row)
+def week_start(d: date) -> date:
+    return d - timedelta(days=d.weekday())
 
 
-def get_client_by_email(email: str):
-    sql = text("""
-        select id, name, email
-        from public.clients
-        where lower(email) = lower(:email)
-        limit 1
-    """)
-    with get_conn() as conn:
-        row = conn.execute(sql, {'email': email}).mappings().first()
-        return dict(row) if row else None
+def calculate_daily_score(
+    check_in_date: date,
+    sleep_target_met: bool,
+    strain_target_met: bool,
+    protein_target_met: bool,
+    calorie_target_met: bool,
+    alcohol_consumed: bool,
+) -> int:
+    score = 0
 
+    is_friday = check_in_date.weekday() == 4
+    is_saturday = check_in_date.weekday() == 5
 
-def get_client_by_id(client_id: int):
-    sql = text("""
-        select id, name, email
-        from public.clients
-        where id = :client_id
-        limit 1
-    """)
-    with get_conn() as conn:
-        row = conn.execute(sql, {'client_id': client_id}).mappings().first()
-        return dict(row) if row else None
+    if sleep_target_met or is_saturday:
+        score += 1
+    if strain_target_met:
+        score += 1
+    if protein_target_met:
+        score += 1
+    if calorie_target_met:
+        score += 1
 
+    if alcohol_consumed and not is_friday:
+        score -= 3
 
-def submit_checkin_record(
-    client_id: int,
-    weight: str,
-    energy_level: str,
-    sleep_hours: str = '',
-    workout_completed: str = '',
-    quick_note: str = '',
-) -> dict:
-    sql = text("""
-        insert into public.check_ins (
-            client_id,
-            check_in_date,
-            weight,
-            energy_level,
-            sleep_hours,
-            workout_completed,
-            quick_note
-        )
-        values (
-            :client_id,
-            :check_in_date,
-            :weight,
-            :energy_level,
-            :sleep_hours,
-            :workout_completed,
-            :quick_note
-        )
-        returning id, client_id, check_in_date, weight, energy_level, sleep_hours, workout_completed, quick_note
-    """)
-
-    payload = {
-        'client_id': client_id,
-        'check_in_date': date.today().isoformat(),
-        'weight': float(weight) if weight else None,
-        'energy_level': int(energy_level) if energy_level else None,
-        'sleep_hours': float(sleep_hours) if sleep_hours else None,
-        'workout_completed': workout_completed or None,
-        'quick_note': quick_note or None,
-    }
-
-    with get_conn() as conn:
-        row = conn.execute(sql, payload).mappings().first()
-        conn.commit()
-        if not row:
-            raise RuntimeError('Check-in insert failed.')
-        return dict(row)
-
-
-def get_recent_checkins_for_client(client_id: int, limit: int = 10) -> list[dict]:
-    sql = text("""
-        select
-            id,
-            check_in_date,
-            weight,
-            energy_level,
-            sleep_hours,
-            workout_completed,
-            quick_note
-        from public.check_ins
-        where client_id = :client_id
-        order by check_in_date desc, id desc
-        limit :limit
-    """)
-    with get_conn() as conn:
-        rows = conn.execute(sql, {'client_id': client_id, 'limit': limit}).mappings().all()
-        return [dict(row) for row in rows]
-
-
-def get_admin_overview(limit_clients: int = 100) -> list[dict]:
-    sql = text("""
-        select
-            c.id,
-            c.name,
-            c.email,
-            ci.check_in_date,
-            ci.weight,
-            ci.energy_level,
-            ci.sleep_hours,
-            ci.workout_completed,
-            ci.quick_note
-        from public.clients c
-        left join (
-            select distinct on (client_id)
-                client_id,
-                check_in_date,
-                weight,
-                energy_level,
-                sleep_hours,
-                workout_completed,
-                quick_note
-            from public.check_ins
-            order by client_id, check_in_date desc, id desc
-        ) ci
-            on c.id = ci.client_id
-        order by c.id desc
-        limit :limit_clients
-    """)
-    with get_conn() as conn:
-        rows = conn.execute(sql, {'limit_clients': limit_clients}).mappings().all()
-        return [dict(row) for row in rows]
+    return score
 
 
 def test_db_connection() -> tuple[bool, str]:
@@ -182,14 +74,112 @@ def test_db_connection() -> tuple[bool, str]:
         return False, f'Connection failed: {exc}'
 
 
+def save_checkin(
+    participant_name: str,
+    sleep_target_met: bool,
+    strain_target_met: bool,
+    protein_target_met: bool,
+    calorie_target_met: bool,
+    alcohol_consumed: bool,
+) -> dict:
+    today = date.today()
+    daily_score = calculate_daily_score(
+        today,
+        sleep_target_met,
+        strain_target_met,
+        protein_target_met,
+        calorie_target_met,
+        alcohol_consumed,
+    )
+
+    sql = text("""
+        insert into public.fitness_competition_checkins (
+            participant_name,
+            check_in_date,
+            sleep_target_met,
+            strain_target_met,
+            protein_target_met,
+            calorie_target_met,
+            alcohol_consumed,
+            daily_score
+        )
+        values (
+            :participant_name,
+            :check_in_date,
+            :sleep_target_met,
+            :strain_target_met,
+            :protein_target_met,
+            :calorie_target_met,
+            :alcohol_consumed,
+            :daily_score
+        )
+        on conflict (participant_name, check_in_date)
+        do update set
+            sleep_target_met = excluded.sleep_target_met,
+            strain_target_met = excluded.strain_target_met,
+            protein_target_met = excluded.protein_target_met,
+            calorie_target_met = excluded.calorie_target_met,
+            alcohol_consumed = excluded.alcohol_consumed,
+            daily_score = excluded.daily_score,
+            updated_at = now()
+        returning *
+    """)
+
+    payload = {
+        'participant_name': participant_name,
+        'check_in_date': today.isoformat(),
+        'sleep_target_met': sleep_target_met,
+        'strain_target_met': strain_target_met,
+        'protein_target_met': protein_target_met,
+        'calorie_target_met': calorie_target_met,
+        'alcohol_consumed': alcohol_consumed,
+        'daily_score': daily_score,
+    }
+
+    with get_conn() as conn:
+        row = conn.execute(sql, payload).mappings().first()
+        conn.commit()
+        return dict(row)
+
+
+def get_weekly_rows() -> list[dict]:
+    start = week_start(date.today())
+    end = start + timedelta(days=6)
+
+    sql = text("""
+        select *
+        from public.fitness_competition_checkins
+        where check_in_date between :start_date and :end_date
+        order by check_in_date asc, participant_name asc
+    """)
+
+    with get_conn() as conn:
+        rows = conn.execute(sql, {
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+        }).mappings().all()
+        return [dict(row) for row in rows]
+
+
+def get_weekly_scores() -> dict:
+    rows = get_weekly_rows()
+    scores = {'Kirill': 0, 'Flor': 0}
+
+    for row in rows:
+        name = row['participant_name']
+        scores[name] = scores.get(name, 0) + int(row['daily_score'] or 0)
+
+    return scores
+
+
 def page_shell(title: str, subtitle: str, back_route: str | None = None):
-    with ui.column().classes('w-full max-w-6xl mx-auto p-6 gap-6'):
+    with ui.column().classes('w-full max-w-4xl mx-auto p-6 gap-6'):
         with ui.row().classes('w-full items-center justify-between'):
             with ui.row().classes('items-center gap-3'):
                 ui.icon('local_florist', color=PRIMARY).classes('text-4xl')
                 with ui.column().classes('gap-0'):
                     ui.label('Blossom of Wellness').classes('text-2xl font-bold')
-                    ui.label('Daily check-ins and coaching').classes('text-gray-600')
+                    ui.label('Kirill vs Flor Fitness Challenge').classes('text-gray-600')
             if back_route:
                 ui.button('Back', on_click=lambda: ui.navigate.to(back_route), icon='arrow_back').props('outline')
 
@@ -199,173 +189,148 @@ def page_shell(title: str, subtitle: str, back_route: str | None = None):
 
 @ui.page('/')
 def landing_page():
-    page_shell('Welcome', 'Client check-ins and admin review')
+    page_shell('Weekly Fitness Challenge', 'Daily check-ins. Weekly winner. Blossom energy.')
 
     ok, message = test_db_connection()
     ui.label(message).classes(f"text-sm {'text-green-700' if ok else 'text-red-600'}")
 
+    scores = get_weekly_scores()
+
+    with ui.card().classes('w-full p-5'):
+        ui.label('Current Weekly Score').classes('text-xl font-semibold')
+        ui.label(f"Kirill: {scores.get('Kirill', 0)} points")
+        ui.label(f"Flor: {scores.get('Flor', 0)} points")
+
     with ui.column().classes('w-full gap-4'):
-        ui.button('Client Login', on_click=lambda: ui.navigate.to('/client-login')).classes('w-full')
-        ui.button('Client Sign Up', on_click=lambda: ui.navigate.to('/client-signup')).classes('w-full')
-        ui.button('Admin Login', on_click=lambda: ui.navigate.to('/admin-login')).classes('w-full')
+        ui.button('Kirill Check-In', on_click=lambda: ui.navigate.to('/login/Kirill')).classes('w-full')
+        ui.button('Flor Check-In', on_click=lambda: ui.navigate.to('/login/Flor')).classes('w-full')
+        ui.button('View Leaderboard', on_click=lambda: ui.navigate.to('/leaderboard')).classes('w-full').props('outline')
+
+    ui.label(f'Version: {APP_VERSION}').classes('text-xs text-gray-500')
 
 
-@ui.page('/client-signup')
-def client_signup_page():
-    page_shell('Client Sign Up', 'Enter name and email to create a client record', '/')
-
-    name = ui.input('Name').classes('w-full max-w-lg')
-    email = ui.input('Email').classes('w-full max-w-lg')
-
-    def signup():
-        try:
-            if not name.value or not email.value:
-                ui.notify('Name and email required', type='warning')
-                return
-
-            existing = get_client_by_email(email.value)
-            if existing:
-                ui.notify('Client already exists. Please use Client Login.', type='warning')
-                return
-
-            create_client_record(name.value, email.value)
-            ui.navigate.to('/client-signup-success')
-        except Exception as exc:
-            ui.notify(f'Sign up failed: {exc}', type='negative')
-        print('client signup clicked')
-
-    ui.button('Create Client', on_click=signup).classes('w-full max-w-lg')
-
-
-@ui.page('/client-signup-success')
-def client_signup_success_page():
-    page_shell('Client Created', 'The client was successfully added to the system.', '/')
-    ui.label('Success — the client record has been saved.').classes('text-lg text-green-700')
-    ui.button('Back to Home', on_click=lambda: ui.navigate.to('/')).classes('mt-4')
-
-
-@ui.page('/client-login')
-def client_login_page():
-    page_shell('Client Login', 'Enter your email to continue to check-ins', '/')
-
-    email = ui.input('Email').classes('w-full max-w-lg')
-
-    def login():
-        try:
-            client = get_client_by_email(email.value or '')
-            if not client:
-                ui.notify('Client not found', type='negative')
-                return
-            ui.navigate.to(f"/client-checkin/{client['id']}")
-        except Exception as exc:
-            ui.notify(f'Login failed: {exc}', type='negative')
-        print('client login clicked')
-
-    ui.button('Login', on_click=login).classes('w-full max-w-lg')
-
-
-@ui.page('/client-checkin/{client_id}')
-def client_checkin_page(client_id: str):
-    try:
-        client = get_client_by_id(int(client_id))
-    except ValueError:
-        client = None
-
-    if not client:
-        page_shell('Client Check-In', 'Client not found', '/')
-        ui.label('Invalid client. Please log in again.').classes('text-red-600')
+@ui.page('/login/{participant_name}')
+def login_page(participant_name: str):
+    if participant_name not in ['Kirill', 'Flor']:
+        page_shell('Invalid Participant', 'Please return home.', '/')
         return
 
-    page_shell('Client Check-In', f"Logged in as {client['name']}", '/')
+    page_shell(f'{participant_name} Login', 'Enter your password to continue.', '/')
 
-    with ui.column().classes('w-full max-w-xl gap-3'):
-        weight = ui.input('Weight')
-        energy = ui.input('Energy (1–10)')
-        sleep = ui.input('Sleep Hours')
-        workout = ui.input('Workout Completed?')
-        note = ui.textarea('Note')
-
-        @ui.refreshable
-        def recent():
-            rows = get_recent_checkins_for_client(client['id'], limit=10)
-            ui.separator()
-            ui.label('Recent Check-Ins').classes('text-xl font-semibold')
-            if not rows:
-                ui.label('No check-ins yet.')
-                return
-
-            for row in rows:
-                with ui.card().classes('w-full max-w-xl p-4'):
-                    ui.label(f"Date: {row.get('check_in_date', '')}")
-                    ui.label(f"Weight: {row.get('weight', '—')}")
-                    ui.label(f"Energy: {row.get('energy_level', '—')}")
-                    ui.label(f"Sleep: {row.get('sleep_hours', '—')}")
-                    ui.label(f"Workout: {row.get('workout_completed', '—')}")
-                    ui.label(f"Note: {row.get('quick_note', '—')}")
-
-        def submit():
-            try:
-                if not energy.value:
-                    ui.notify('Energy is required', type='warning')
-                    return
-
-                submit_checkin_record(
-                    client['id'],
-                    weight.value,
-                    energy.value,
-                    sleep.value,
-                    workout.value,
-                    note.value,
-                )
-                ui.notify('Check-in saved')
-                weight.set_value('')
-                energy.set_value('')
-                sleep.set_value('')
-                workout.set_value('')
-                note.set_value('')
-                recent.refresh()
-            except Exception as exc:
-                ui.notify(f'Check-in failed: {exc}', type='negative')
-
-        ui.button('Submit Check-In', on_click=submit).classes('w-full')
-        recent()
-
-
-@ui.page('/admin-login')
-def admin_login_page():
-    page_shell('Admin Login', 'Enter admin credentials', '/')
-
-    email = ui.input('Admin Email').classes('w-full max-w-lg')
     password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full max-w-lg')
-    results = ui.column().classes('w-full gap-3')
 
     def login():
-        results.clear()
-        if email.value != ADMIN_EMAIL or password.value != ADMIN_PASSWORD:
-            ui.notify('Invalid admin credentials', type='negative')
+        expected = KIRILL_PASSWORD if participant_name == 'Kirill' else FLOR_PASSWORD
+
+        if password.value != expected:
+            ui.notify('Invalid password', type='negative')
             return
 
-        rows = get_admin_overview()
+        ui.navigate.to(f'/checkin/{participant_name}')
 
-        with results:
-            ui.label('Admin Overview').classes('text-2xl font-semibold')
-            if not rows:
-                ui.label('No clients found.')
-                return
+    ui.button('Continue', on_click=login).classes('w-full max-w-lg')
 
-            for row in rows:
-                with ui.card().classes('w-full p-4'):
-                    ui.label(row.get('name', 'Unknown')).classes('text-lg font-semibold')
-                    ui.label(f"Email: {row.get('email', '—')}")
-                    ui.label(f"Last check-in: {row.get('check_in_date', 'No check-ins yet')}")
-                    ui.label(f"Latest weight: {row.get('weight', '—')}")
-                    ui.label(f"Latest energy: {row.get('energy_level', '—')}")
-                    ui.label(f"Latest sleep: {row.get('sleep_hours', '—')}")
-                    ui.label(f"Latest workout: {row.get('workout_completed', '—')}")
-                    ui.label(f"Latest note: {row.get('quick_note', '—')}")
-        print('admin login clicked')
 
-    ui.button('Login', on_click=login).classes('w-full max-w-lg')
+@ui.page('/checkin/{participant_name}')
+def checkin_page(participant_name: str):
+    if participant_name not in ['Kirill', 'Flor']:
+        page_shell('Invalid Participant', 'Please return home.', '/')
+        return
+
+    today = date.today()
+    is_friday = today.weekday() == 4
+    is_saturday = today.weekday() == 5
+
+    page_shell(
+        f'{participant_name} Daily Check-In',
+        'Mark yes or no for today’s competition vector.',
+        '/',
+    )
+
+    if is_friday:
+        ui.label('Friday cheat day: alcohol has no penalty today.').classes('text-amber-700 font-semibold')
+
+    if is_saturday:
+        ui.label('Saturday recovery rule: sleep target is automatically credited today.').classes('text-emerald-700 font-semibold')
+
+    sleep = ui.checkbox('Sleep target above 75%? (+1)').classes('text-lg')
+    strain = ui.checkbox('Daily strain target met? (+1)').classes('text-lg')
+    protein = ui.checkbox('Daily protein intake met? (+1)').classes('text-lg')
+    calories = ui.checkbox('Daily calorie target met? (+1)').classes('text-lg')
+    alcohol = ui.checkbox('Alcohol consumed? (-3, except Friday)').classes('text-lg')
+
+    if is_saturday:
+        sleep.set_value(True)
+        sleep.disable()
+
+    result = ui.column().classes('w-full gap-3')
+
+    def submit():
+        result.clear()
+
+        row = save_checkin(
+            participant_name,
+            bool(sleep.value),
+            bool(strain.value),
+            bool(protein.value),
+            bool(calories.value),
+            bool(alcohol.value),
+        )
+
+        with result:
+            ui.notify('Check-in saved', type='positive')
+            ui.card().classes('w-full p-4').classes('bg-green-50')
+            ui.label(f"Saved for {participant_name}: {row['daily_score']} points today").classes('text-xl font-semibold')
+            ui.button('View Leaderboard', on_click=lambda: ui.navigate.to('/leaderboard')).classes('w-full')
+
+    ui.button('Submit Check-In', on_click=submit).classes('w-full max-w-lg')
+
+
+@ui.page('/leaderboard')
+def leaderboard_page():
+    start = week_start(date.today())
+    end = start + timedelta(days=6)
+
+    page_shell(
+        'Weekly Leaderboard',
+        f'Week of {start.isoformat()} through {end.isoformat()}',
+        '/',
+    )
+
+    rows = get_weekly_rows()
+    scores = get_weekly_scores()
+
+    kirill_score = scores.get('Kirill', 0)
+    flor_score = scores.get('Flor', 0)
+
+    with ui.card().classes('w-full p-5'):
+        ui.label('Current Score').classes('text-2xl font-bold')
+        ui.label(f'Kirill: {kirill_score} points').classes('text-lg')
+        ui.label(f'Flor: {flor_score} points').classes('text-lg')
+
+        if kirill_score > flor_score:
+            ui.label('Current leader: Kirill 🌱').classes('text-green-700 font-semibold')
+        elif flor_score > kirill_score:
+            ui.label('Current leader: Flor 🌸').classes('text-green-700 font-semibold')
+        else:
+            ui.label('Currently tied 🤝').classes('text-amber-700 font-semibold')
+
+    ui.separator()
+    ui.label('Daily History').classes('text-xl font-semibold')
+
+    if not rows:
+        ui.label('No check-ins yet this week.')
+        return
+
+    for row in rows:
+        with ui.card().classes('w-full p-4'):
+            ui.label(f"{row['check_in_date']} — {row['participant_name']}").classes('font-semibold')
+            ui.label(f"Daily score: {row['daily_score']}")
+            ui.label(f"Sleep: {'Yes' if row['sleep_target_met'] else 'No'}")
+            ui.label(f"Strain: {'Yes' if row['strain_target_met'] else 'No'}")
+            ui.label(f"Protein: {'Yes' if row['protein_target_met'] else 'No'}")
+            ui.label(f"Calories: {'Yes' if row['calorie_target_met'] else 'No'}")
+            ui.label(f"Alcohol: {'Yes' if row['alcohol_consumed'] else 'No'}")
 
 
 ui.run(
@@ -374,5 +339,3 @@ ui.run(
     title='Blossom of Wellness',
     reload=False,
 )
-
-ui.label(APP_VERSION).classes('text-xs text-gray-500')
